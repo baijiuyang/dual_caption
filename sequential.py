@@ -4,7 +4,7 @@ from openai import OpenAI, AsyncOpenAI
 import srt
 import asyncio
 
-client = AsyncOpenAI()
+client = OpenAI()
 parser = argparse.ArgumentParser()
 
 parser.add_argument("filename", type=str)
@@ -56,8 +56,8 @@ def count_words(content: str) -> str:
     return content.count(" ")
 
 
-async def get_answer(instruction: str, prompt: str):
-    response = await client.chat.completions.create(
+def get_answer(instruction: str, prompt: str):
+    response = client.chat.completions.create(
         # model="gpt-3.5-turbo-0125",
         model="gpt-4o-mini",
         # model="gpt-4-turbo-2024-04-09",
@@ -72,26 +72,20 @@ async def get_answer(instruction: str, prompt: str):
     return response.choices[0].message.content, response.usage.total_tokens
 
 
-async def async_main(raw_srt: str):
+def main():
+    raw_srt = load_srt(args.filename)
     lines = get_content_from_srt(raw_srt)
     instruction = create_instruction()
-    tasks = []
     total_results = []
     for i in range(len(lines)):
         if i > 450 and i % 450 == 1:
             print("Reached 450 RPM. Wait for 62s.")
-            results = await asyncio.gather(*tasks)
-            total_results += results
-            tasks = []
             time.sleep(62)
         last_line = lines[i - 1] if i > 0 else ""
         line = lines[i]
         next_line = lines[i + 1] if i < len(lines) - 1 else ""
         prompt = create_prompt(args.lang_a, args.lang_b, line, last_line, next_line)
-        task = asyncio.create_task(get_answer(instruction, prompt))
-        tasks.append(task)
-    results = await asyncio.gather(*tasks)
-    total_results += results
+        total_results.append(get_answer(instruction, prompt))
     total_usage = 0
     lines = []
     for line, usage in total_results:
@@ -102,11 +96,6 @@ async def async_main(raw_srt: str):
 
     new_srt = add_second_subtitles(raw_srt, lines)
     save_srt(new_srt, args.filename[:-4] + "_output.srt")
-
-
-def main():
-    raw_srt = load_srt(args.filename)
-    asyncio.run(async_main(raw_srt))
 
 
 if __name__ == "__main__":
