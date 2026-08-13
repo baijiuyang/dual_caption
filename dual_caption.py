@@ -14,13 +14,20 @@ from pathlib import Path
 
 import srt
 from dotenv import load_dotenv
-from openai import AsyncOpenAI, BadRequestError, RateLimitError
+from openai import AsyncOpenAI, RateLimitError
 
-MODEL = "gpt-5-mini-2025-08-07"
-TEMPERATURE = float(_t) if (_t := os.environ.get("OPENAI_TEMPERATURE")) else None
+# DeepSeek serves an OpenAI-compatible API, so we keep the openai SDK and only
+# repoint its base URL.
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+# One call per subtitle line, and translation is easier than ASR repair, so this
+# stays on `flash`. json_to_srt.py uses `pro` for the refinement pass.
+MODEL = "deepseek-v4-flash"
+TEMPERATURE = float(_t) if (_t := os.environ.get("LLM_TEMPERATURE")) else None
 
 load_dotenv()
-client = AsyncOpenAI()
+client = AsyncOpenAI(
+    api_key=os.environ.get("DEEPSEEK_API_KEY"), base_url=DEEPSEEK_BASE_URL
+)
 
 
 def add_second_subtitles(subs: list[srt.Subtitle], lines: list[str]) -> str:
@@ -75,6 +82,21 @@ def create_instruction() -> str:
     return "You are a subtitles translator."
 
 
+# "Out of credits" comes back as a 429, same as ordinary throttling. Retrying it
+# never helps, so it must fail fast instead of burning the whole backoff budget.
+_QUOTA_ERROR_CODES = frozenset({"insufficient_quota", "credit_balance_exhausted"})
+MAX_RETRY_DELAY_S = 60.0
+
+
+def _is_quota_error(error: RateLimitError) -> bool:
+    """True for a 429 that means "no credits left" rather than "too fast"."""
+    if getattr(error, "code", None) in _QUOTA_ERROR_CODES:
+        return True
+    if getattr(error, "type", None) in _QUOTA_ERROR_CODES:
+        return True
+    return any(code in str(error) for code in _QUOTA_ERROR_CODES)
+
+
 def _parse_retry_after(error: RateLimitError) -> float | None:
     """Parse the suggested retry wait time (seconds) from a RateLimitError."""
     # 1. Try the Retry-After response header
@@ -99,52 +121,34 @@ async def get_answer(instruction: str, prompt: str, max_retries: int = 10):
     base_delay = 1.0
     for attempt in range(max_retries):
         try:
-            # Some models only support the default temperature. To stay compatible,
-            # we omit `temperature` unless explicitly configured.
+            # Omit `temperature` unless explicitly configured, so the model's own
+            # default applies.
             kwargs = {}
             if TEMPERATURE is not None:
                 kwargs["temperature"] = TEMPERATURE
 
-            try:
-                response = await client.chat.completions.create(
-                    model=MODEL,
-                    messages=[
-                        {"role": "system", "content": instruction},
-                        {"role": "user", "content": prompt},
-                    ],
-                    **kwargs,
-                )
-            except BadRequestError as e:
-                # If a model rejects non-default temperature, retry once without it.
-                msg = str(e)
-                if (
-                    "temperature" in msg
-                    and "Only the default (1) value is supported" in msg
-                    and "temperature" in kwargs
-                ):
-                    response = await client.chat.completions.create(
-                        model=MODEL,
-                        messages=[
-                            {"role": "system", "content": instruction},
-                            {"role": "user", "content": prompt},
-                        ],
-                    )
-                else:
-                    raise
+            response = await client.chat.completions.create(
+                model=MODEL,
+                messages=[
+                    {"role": "system", "content": instruction},
+                    {"role": "user", "content": prompt},
+                ],
+                **kwargs,
+            )
             content = (
                 (response.choices[0].message.content or "").strip().strip("\"'").strip()
             )
             print(content)
             return content, response.usage.total_tokens
         except RateLimitError as e:
-            if attempt == max_retries - 1:
+            if _is_quota_error(e) or attempt == max_retries - 1:
                 raise
             wait_time = _parse_retry_after(e)
             if wait_time is None:
-                wait_time = base_delay * (2**attempt)
-            else:
-                # API-suggested wait may be very short; floor at 1 second
-                wait_time = max(wait_time, 1.0)
+                # Cap our own guess so a long retry chain can't stall the UI.
+                wait_time = min(base_delay * (2**attempt), MAX_RETRY_DELAY_S)
+            # API-suggested wait may be very short; floor at 1 second
+            wait_time = max(wait_time, 1.0)
             print(
                 f"Rate limit reached. Waiting {wait_time:.1f}s before retry ({attempt + 1}/{max_retries})..."
             )

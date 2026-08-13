@@ -46,7 +46,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         # Step 3
         "step3_header": "Step 3 — Convert corrected JSON to SRT",
         "step3_desc": "Applies rule-based segmentation (temporal proximity, punctuation, visual length caps), then an LLM refinement pass that merges fragments, splits over-long lines, and tightens punctuation. Output is an SRT ready for your video editor.",
-        "openai_warn": "`OPENAI_API_KEY` is not set. Configure it via `.env` (local) or Streamlit secrets (cloud) to enable this step.",
+        "llm_warn": "`DEEPSEEK_API_KEY` is not set. Configure it via `.env` (local) or Streamlit secrets (cloud) to enable this step.",
         "using_corrected": "Using the corrected transcript from Step 2.",
         "upload_other_json": "Upload a different JSON instead",
         "corrected_json_label": "Corrected transcript JSON",
@@ -62,7 +62,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         # Optional dual
         "dual_header": "Optional — Add Chinese–English dual subtitles",
         "dual_desc": "Translate each line to the other language and stack it below the original. Uses the SRT from Step 3 automatically, or upload your own.",
-        "openai_warn_dual": "`OPENAI_API_KEY` is not set. Configure it to enable dual subtitles.",
+        "llm_warn_dual": "`DEEPSEEK_API_KEY` is not set. Configure it to enable dual subtitles.",
         "using_srt": "Using the SRT from Step 3.",
         "upload_other_srt": "Upload a different SRT instead",
         "srt_file_label": "SRT file",
@@ -113,7 +113,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         # Step 3
         "step3_header": "步骤 3 — 将校对后的 JSON 转换为 SRT",
         "step3_desc": "先进行基于规则的分句（时间邻近度、标点、显示长度上限），再通过大模型优化：合并碎片、拆分过长行、规整标点。输出可直接用于视频剪辑的 SRT。",
-        "openai_warn": "未设置 `OPENAI_API_KEY`。请在 `.env`（本地）或 Streamlit secrets（云端）中配置以启用此步骤。",
+        "llm_warn": "未设置 `DEEPSEEK_API_KEY`。请在 `.env`（本地）或 Streamlit secrets（云端）中配置以启用此步骤。",
         "using_corrected": "正在使用步骤 2 的校对结果。",
         "upload_other_json": "改为上传其他 JSON",
         "corrected_json_label": "校对后的转录 JSON",
@@ -129,7 +129,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         # Optional dual
         "dual_header": "可选 — 添加中英双语字幕",
         "dual_desc": "将每一行翻译为另一种语言，并叠加在原文下方。会自动使用步骤 3 的 SRT，也可自行上传。",
-        "openai_warn_dual": "未设置 `OPENAI_API_KEY`。请配置后启用双语字幕。",
+        "llm_warn_dual": "未设置 `DEEPSEEK_API_KEY`。请配置后启用双语字幕。",
         "using_srt": "正在使用步骤 3 的 SRT。",
         "upload_other_srt": "改为上传其他 SRT",
         "srt_file_label": "SRT 文件",

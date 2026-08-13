@@ -10,7 +10,7 @@ mixed‑language Mandarin/English content** and want broadcast‑quality results
 without hours of manual cleanup.
 
 > **100% free right now.** Just open the [web app](https://dual-caption.streamlit.app/)
-> and start — you do **not** need an OpenAI key, a Soniox key, or any paid
+> and start — you do **not** need a DeepSeek key, a Soniox key, or any paid
 > account. The hosted service covers the speech‑to‑text and AI costs for you.
 
 Keywords: free subtitle generator, automatic captions, audio/video to SRT,
@@ -129,7 +129,7 @@ Yes. The hosted app at
 [dual-caption.streamlit.app](https://dual-caption.streamlit.app/) is completely
 free right now, with no account and no API key needed.
 
-**Do I need an OpenAI or LLM API key?**
+**Do I need a DeepSeek or other LLM API key?**
 No. To use the live web app you don't need any API key — speech‑to‑text and AI
 processing are handled by the hosted service. (You only need your own keys if
 you choose to self‑host the code, see below.)
@@ -164,8 +164,8 @@ published anywhere by the app.
 
 - **Segmentation — rules first, then AI.** Words are grouped into subtitle lines
   using timing gaps, punctuation, and on‑screen length caps (tuned separately
-  for CJK characters vs. Latin words, with min/max line durations). An **OpenAI
-  (gpt‑5‑mini)** pass then refines those candidates: it merges fragments, splits
+  for CJK characters vs. Latin words, with min/max line durations). A **DeepSeek
+  (deepseek‑v4‑pro)** pass then refines those candidates: it merges fragments, splits
   over‑long lines at natural clause boundaries, fixes obvious speech‑recognition
   typos, and tightens punctuation. To stay grounded, the model is first given a
   compact **video summary** (setting, people, recurring terms) generated from
@@ -190,7 +190,7 @@ your **own** copy you supply your own API keys in a `.env` file (see
 [.env.example](.env.example)):
 
 ```
-OPENAI_API_KEY=sk-...
+DEEPSEEK_API_KEY=sk-...
 SONIOX_API_KEY=...
 # Optional: SMTP_* to enable the feedback button
 ```

@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 load_dotenv()
 try:
     for _k in (
-        "OPENAI_API_KEY",
+        "DEEPSEEK_API_KEY",
         "SONIOX_API_KEY",
         "SMTP_HOST",
         "SMTP_PORT",
@@ -27,21 +27,21 @@ try:
 except Exception:
     pass
 
-openai_key = os.environ.get("OPENAI_API_KEY")
+llm_key = os.environ.get("DEEPSEEK_API_KEY")
 soniox_key = os.environ.get("SONIOX_API_KEY")
 
-# transcribe has no OpenAI dependency so import it unconditionally.
+# transcribe has no LLM dependency so import it unconditionally.
 from transcribe import transcribe_audio_json  # noqa: E402
 
-# Segmentation helpers have no OpenAI runtime dependency (the module only
-# instantiates the client when OPENAI_API_KEY is set), so import unconditionally.
+# Segmentation helpers have no LLM runtime dependency (the module only
+# instantiates the client when DEEPSEEK_API_KEY is set), so import unconditionally.
 from feedback import FeedbackError, feedback_configured, send_feedback  # noqa: E402
 from i18n import COMPONENT_LABELS, TRANSLATIONS, detect_lang  # noqa: E402
 from json_to_srt import _normalize_tokens, segment_tokens  # noqa: E402
 from retime import retime_line  # noqa: E402
 
-# dual_caption and json_to_srt's OpenAI-backed entrypoints need the key.
-if openai_key:
+# dual_caption and json_to_srt's LLM-backed entrypoints need the key.
+if llm_key:
     from dual_caption import add_dual_captions  # noqa: E402
     from json_to_srt import json_to_srt  # noqa: E402
 
@@ -335,8 +335,8 @@ st.divider()
 st.header(t("step3_header"))
 st.write(t("step3_desc"))
 
-if not openai_key:
-    st.warning(t("openai_warn"))
+if not llm_key:
+    st.warning(t("llm_warn"))
 else:
     raw = None
     stem = "transcript"
@@ -407,8 +407,8 @@ st.divider()
 st.header(t("dual_header"))
 st.write(t("dual_desc"))
 
-if not openai_key:
-    st.warning(t("openai_warn_dual"))
+if not llm_key:
+    st.warning(t("llm_warn_dual"))
 else:
     raw_srt = None
     dual_stem = "subtitles"

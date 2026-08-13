@@ -23,9 +23,16 @@ from pathlib import Path
 
 import srt
 from dotenv import load_dotenv
-from openai import AsyncOpenAI, BadRequestError, RateLimitError
+from openai import AsyncOpenAI, RateLimitError
 
-MODEL = "gpt-5-mini-2025-08-07"
+# DeepSeek serves an OpenAI-compatible API, so we keep the openai SDK and only
+# repoint its base URL.
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+# Refinement is only ~10 calls per video but carries the proper-noun and
+# punctuation repair, where `pro` measurably beats `flash` (it recovered a
+# mangled "爱达荷州" that flash got wrong). dual_caption.py stays on `flash`:
+# translation is one call per subtitle line and an easier task.
+MODEL = "deepseek-v4-pro"
 CHUNK_SIZE = 30
 
 CHINESE_TARGET_CHARS = 8
@@ -38,10 +45,15 @@ SOFT_GAP_S = 0.5
 MIN_LINE_DURATION_S = 0.6
 MAX_LINE_DURATION_S = 6.0
 
-TEMPERATURE = float(_t) if (_t := os.environ.get("OPENAI_TEMPERATURE")) else None
+# Extra on-screen time added after the speech ends so there is time to read.
+# Capped by the next line's start, so tight passages get less than this.
+READING_PAD_S = 1.0
+
+TEMPERATURE = float(_t) if (_t := os.environ.get("LLM_TEMPERATURE")) else None
 
 load_dotenv()
-client = AsyncOpenAI() if os.environ.get("OPENAI_API_KEY") else None
+_api_key = os.environ.get("DEEPSEEK_API_KEY")
+client = AsyncOpenAI(api_key=_api_key, base_url=DEEPSEEK_BASE_URL) if _api_key else None
 
 _CJK_RE = re.compile(r"[一-鿿]")  # CJK Unified Ideographs (covers simplified Chinese)
 _PUNCT_HARD = set("。！？.!?")
@@ -274,12 +286,15 @@ SUMMARY_PROMPT_TEMPLATE = (
     "Subtitles:\n{content}"
 )
 
-REFINE_INSTRUCTION_BASE = """You are finalizing speech-to-text subtitle candidates from a biking vlog (simplified Chinese, English, or mixed). If you write any Chinese, use simplified characters only.
+# The length limits are interpolated from the constants above so the prompt and
+# the safety net in _apply_groups can never drift apart.
+REFINE_INSTRUCTION_BASE = (
+    """You are finalizing speech-to-text subtitle candidates from a biking vlog (simplified Chinese, English, or mixed). If you write any Chinese, use simplified characters only.
 
 You will receive numbered subtitle candidates. For each input index, you may either:
   - keep it as-is,
   - merge it with adjacent entries (consecutive indices only), or
-  - split a single entry into two sub-lines (only if it exceeds ~9 English words or ~18 Chinese chars and a natural clause boundary exists).
+  - split a single entry into two sub-lines (only if it exceeds the length limit below and a natural clause boundary exists).
 
 Also fix obvious ASR typos and add missing punctuation using context. Do NOT translate or paraphrase.
 
@@ -292,14 +307,21 @@ Return JSON in this exact shape:
   ]
 }
 
-Hard rules:
+"""
+    + f"""LENGTH LIMIT — the single most important rule:
+- No output line may exceed {CHINESE_MAX_CHARS} Chinese characters or {ENGLISH_MAX_WORDS} English words. This is a hard limit, not a target.
+- Before you merge, count the characters of the combined text. If the result would exceed the limit, DO NOT merge — leave the entries as separate groups.
+- An over-length merge is automatically discarded and the original unpolished text is used instead. Merging too greedily therefore makes the output worse than not merging at all.
+- Merge only short fragments that clearly belong to one clause. When in doubt, keep entries separate.
+
+Other hard rules:
 - Every input index appears in exactly one group.
 - Indices within a group are consecutive and in ascending order.
 - Groups are returned in order.
 - For a split, "indices" must contain exactly one index and "splits" must contain exactly two strings.
-- Keep each output line short (about one subtitle line: ~9 English words or ~18 Chinese chars max).
 - Preserve the speaker's original meaning, language, and style.
 """
+)
 
 
 def _build_refine_instruction(video_summary: str) -> str:
@@ -309,6 +331,20 @@ def _build_refine_instruction(video_summary: str) -> str:
         REFINE_INSTRUCTION_BASE
         + f"\nVideo summary (use for context when fixing errors):\n{video_summary}\n"
     )
+
+
+# "Out of credits" comes back as a 429, same as ordinary throttling. Retrying it
+# never helps, so it must fail fast instead of burning the whole backoff budget.
+_QUOTA_ERROR_CODES = frozenset({"insufficient_quota", "credit_balance_exhausted"})
+MAX_RETRY_DELAY_S = 60.0
+
+
+def _is_quota_error(error: RateLimitError) -> bool:
+    if getattr(error, "code", None) in _QUOTA_ERROR_CODES:
+        return True
+    if getattr(error, "type", None) in _QUOTA_ERROR_CODES:
+        return True
+    return any(code in str(error) for code in _QUOTA_ERROR_CODES)
 
 
 def _parse_retry_after(error: RateLimitError) -> float | None:
@@ -339,38 +375,23 @@ async def _call_llm(
             if json_mode:
                 kwargs["response_format"] = {"type": "json_object"}
 
-            try:
-                response = await client.chat.completions.create(
-                    model=MODEL,
-                    messages=[
-                        {"role": "system", "content": instruction},
-                        {"role": "user", "content": prompt},
-                    ],
-                    **kwargs,
-                )
-            except BadRequestError as e:
-                msg = str(e)
-                if (
-                    "temperature" in msg
-                    and "Only the default (1) value is supported" in msg
-                    and "temperature" in kwargs
-                ):
-                    kwargs.pop("temperature")
-                    response = await client.chat.completions.create(
-                        model=MODEL,
-                        messages=[
-                            {"role": "system", "content": instruction},
-                            {"role": "user", "content": prompt},
-                        ],
-                        **kwargs,
-                    )
-                else:
-                    raise
+            response = await client.chat.completions.create(
+                model=MODEL,
+                messages=[
+                    {"role": "system", "content": instruction},
+                    {"role": "user", "content": prompt},
+                ],
+                **kwargs,
+            )
             return response.choices[0].message.content, response.usage.total_tokens
         except RateLimitError as e:
-            if attempt == max_retries - 1:
+            if _is_quota_error(e) or attempt == max_retries - 1:
                 raise
-            wait_time = _parse_retry_after(e) or base_delay * (2**attempt)
+            # Honour a server-supplied wait verbatim; cap only our own guess so a
+            # long retry chain can't stall the UI for many minutes.
+            wait_time = _parse_retry_after(e)
+            if wait_time is None:
+                wait_time = min(base_delay * (2**attempt), MAX_RETRY_DELAY_S)
             wait_time = max(wait_time, 1.0)
             print(
                 f"Rate limit. Waiting {wait_time:.1f}s ({attempt + 1}/{max_retries})..."
@@ -533,14 +554,27 @@ async def refine_with_llm(segments: list[Segment], video_summary: str) -> list[S
 # -- Compose ------------------------------------------------------------------
 
 
+def _padded_end_ms(segments: list[Segment], i: int) -> int:
+    """End time for segment i, extended past the speech so there is time to read.
+
+    A line otherwise disappears the instant the sentence stops, which is far too
+    quick for short or fast speech. We add READING_PAD_S, but never run into the
+    next line: if the gap is smaller than the pad, we extend only up to the next
+    line's start. Never shortens a line (segments can overlap after a split)."""
+    end_ms = segments[i].end_ms + int(READING_PAD_S * 1000)
+    if i + 1 < len(segments):
+        end_ms = min(end_ms, segments[i + 1].start_ms)
+    return max(end_ms, segments[i].end_ms)
+
+
 def compose_srt(segments: list[Segment]) -> str:
     subs: list[srt.Subtitle] = []
-    for i, seg in enumerate(segments, start=1):
+    for i, seg in enumerate(segments):
         subs.append(
             srt.Subtitle(
-                index=i,
+                index=i + 1,
                 start=timedelta(milliseconds=seg.start_ms),
-                end=timedelta(milliseconds=seg.end_ms),
+                end=timedelta(milliseconds=_padded_end_ms(segments, i)),
                 content=seg.text,
             )
         )
@@ -558,7 +592,7 @@ async def json_to_srt(
     if use_llm:
         if client is None:
             raise RuntimeError(
-                "OPENAI_API_KEY is not set; cannot run LLM refinement. Use --no-llm to skip."
+                "DEEPSEEK_API_KEY is not set; cannot run LLM refinement. Use --no-llm to skip."
             )
         video_summary = ""
         if use_summary:
